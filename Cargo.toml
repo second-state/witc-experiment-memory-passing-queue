@@ -1,0 +1,6 @@
+[workspace]
+members = [
+	"runtime",
+	"caller",
+	"callee"
+]

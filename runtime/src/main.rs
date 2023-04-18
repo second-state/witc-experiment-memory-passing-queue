@@ -7,19 +7,16 @@ use wasmedge_sdk::{
     host_function, Caller, ImportObjectBuilder, Vm, WasmValue,
 };
 
-static mut EXCHANGING: VecDeque<Vec<u8>> = VecDeque::new();
+static mut EXCHANGING: VecDeque<String> = VecDeque::new();
 
 #[host_function]
 fn put_buffer(caller: Caller, input: Vec<WasmValue>) -> Result<Vec<WasmValue>, HostFuncError> {
     let offset = input[0].to_i32() as u32;
     let len = input[1].to_i32() as u32;
 
-    let data_buffer = caller.memory(0).unwrap().read(offset, len).unwrap();
+    let data_buffer = caller.memory(0).unwrap().read_string(offset, len).unwrap();
 
-    println!(
-        "put something in to runtime, {}",
-        String::from_utf8(data_buffer.clone()).unwrap()
-    );
+    println!("enqueue {}", data_buffer.clone());
 
     unsafe {
         EXCHANGING.push_back(data_buffer);
@@ -32,18 +29,13 @@ fn put_buffer(caller: Caller, input: Vec<WasmValue>) -> Result<Vec<WasmValue>, H
 fn read_buffer(caller: Caller, _input: Vec<WasmValue>) -> Result<Vec<WasmValue>, HostFuncError> {
     let data_buffer = unsafe { &EXCHANGING.pop_front().unwrap() };
 
-    println!(
-        "get something in to runtime, {}",
-        String::from_utf8(data_buffer.clone()).unwrap()
-    );
+    println!("dequeue {}", data_buffer);
 
     let mut mem = caller.memory(0).unwrap();
 
     let current_tail = mem.size();
-    mem.grow(10).unwrap();
+    mem.grow(100).unwrap();
     let offset = current_tail + 1;
-
-    // TODO: write to somewhere no allocated place
     mem.write(data_buffer, offset).unwrap();
 
     Ok(vec![
@@ -59,7 +51,7 @@ fn main() -> Result<(), Error> {
 
     let import_object = ImportObjectBuilder::new()
         .with_func::<(i32, i32), ()>("write", put_buffer)?
-        .with_func::<i32, ()>("read", read_buffer)?
+        .with_func::<(), (i32, i32)>("read", read_buffer)?
         .build("wasmedge.component.model")?;
 
     let vm = Vm::new(Some(config))?

@@ -1,9 +1,12 @@
+#![feature(wasm_abi)]
+
 use serde::{Deserialize, Serialize};
 
 #[link(wasm_import_module = "wasmedge.component.model")]
-extern "C" {
+extern "wasm" {
     fn write(offset: usize, len: usize);
-    fn read() -> (usize, usize);
+    fn read() -> (u32, u32);
+
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -14,7 +17,7 @@ struct Person {
 
 #[link(wasm_import_module = "callee")]
 extern "C" {
-    fn foo(arity: usize) -> usize;
+    fn component_foo();
 }
 
 #[no_mangle]
@@ -30,15 +33,19 @@ pub unsafe extern "C" fn start() -> u32 {
     let arg2 = serde_json::to_string(&new_age).unwrap();
     write(arg2.as_ptr() as usize, arg2.len());
 
-    let returns_arity = foo(2);
+    component_foo();
     let mut returns: Vec<String> = vec![];
-    for _ in 0..returns_arity {
+    for _ in 0..1 {
         let (offset, len) = read();
-        returns.push(String::from_raw_parts(offset as *mut u8, len, len));
+
+        returns.push(String::from_raw_parts(
+            offset as *mut u8,
+            len as usize,
+            len as usize,
+        ));
     }
 
     let p: Person = serde_json::from_str(returns[0].as_str()).unwrap();
-    println!("{:?}", p);
 
     return 0;
 }

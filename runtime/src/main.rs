@@ -34,6 +34,17 @@ fn read_buffer(caller: Caller, _input: Vec<WasmValue>) -> Result<Vec<WasmValue>,
     let mut mem = caller.memory(0).unwrap();
 
     let current_tail = mem.size();
+    // TODO:
+    // Grow 100 is "enough" in this example, but to have "correct" behavior, we must use grow by
+    // need and have a cache of previous grew offset & grew size.
+    //
+    // For example, if we have string need size 50, it should first look at cache
+    // 1. cache missing than grow 50
+    //    1. memory the `current_tail+1` as `offset`
+    //    2. memory the `grow_size` as `50`
+    // 2. cache existed, than reuse `offset` in cache
+    //    1. if `grow_size` is big enough than reuse it
+    //    2. or grow more to reach the needed, than update the cache
     mem.grow(100).unwrap();
     let offset = current_tail + 1;
     mem.write(data_buffer, offset).unwrap();

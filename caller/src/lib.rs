@@ -2,10 +2,22 @@
 
 use serde::{Deserialize, Serialize};
 
+#[repr(C)]
+pub struct ReadBuf {
+    pub offset: usize,
+    pub len: usize,
+}
+
+impl ToString for ReadBuf {
+    fn to_string(self: &Self) -> String {
+        unsafe { String::from_raw_parts(self.offset as *mut u8, self.len, self.len) }
+    }
+}
+
 #[link(wasm_import_module = "wasmedge.component.model")]
 extern "wasm" {
     fn write(offset: usize, len: usize);
-    fn read() -> (u32, u32);
+    fn read() -> ReadBuf;
 
 }
 
@@ -36,13 +48,8 @@ pub unsafe extern "C" fn start() -> u32 {
     component_foo();
     let mut returns: Vec<String> = vec![];
     for _ in 0..1 {
-        let (offset, len) = read();
-
-        returns.push(String::from_raw_parts(
-            offset as *mut u8,
-            len as usize,
-            len as usize,
-        ));
+        // NOTE: we must clone this string, because next `read` will reuse this memory block
+        returns.push(read().to_string().clone());
     }
 
     let p: Person = serde_json::from_str(returns[0].as_str()).unwrap();

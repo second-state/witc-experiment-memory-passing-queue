@@ -1,13 +1,19 @@
-use std::collections::VecDeque;
-
 use anyhow::Error;
+use once_cell::sync::Lazy;
+use std::collections::{HashMap, VecDeque};
 use wasmedge_sdk::{
     config::{CommonConfigOptions, ConfigBuilder, HostRegistrationConfigOptions},
     error::HostFuncError,
     host_function, Caller, ImportObjectBuilder, Vm, WasmValue,
 };
 
+struct GrowCache {
+    offset: u32,
+    pages: u32,
+}
+
 static mut EXCHANGING: VecDeque<String> = VecDeque::new();
+static mut GREW_SIZE: Lazy<HashMap<String, GrowCache>> = Lazy::new(|| HashMap::new());
 
 #[host_function]
 fn put_buffer(caller: Caller, input: Vec<WasmValue>) -> Result<Vec<WasmValue>, HostFuncError> {
@@ -28,31 +34,67 @@ fn put_buffer(caller: Caller, input: Vec<WasmValue>) -> Result<Vec<WasmValue>, H
 #[host_function]
 fn read_buffer(caller: Caller, _input: Vec<WasmValue>) -> Result<Vec<WasmValue>, HostFuncError> {
     let data_buffer = unsafe { &EXCHANGING.pop_front().unwrap() };
+    let data_size = (data_buffer.as_bytes().len() * 8) as u32;
+    // one page = 64KiB = 65,536 bytes
+    let pages = (data_size / (65536)) + 1;
 
-    println!("dequeue {}", data_buffer);
+    println!(
+        "dequeue `{}`\n pages: {} (64KiB each page)\n data size: {} bytes",
+        data_buffer, pages, data_size,
+    );
 
     let mut mem = caller.memory(0).unwrap();
 
-    let current_tail = mem.size();
-    // TODO:
-    // Grow 100 is "enough" in this example, but to have "correct" behavior, we must use grow by
-    // need and have a cache of previous grew offset & grew size.
-    //
-    // For example, if we have string need size 50, it should first look at cache
-    // 1. cache missing than grow 50
-    //    1. memory the `current_tail+1` as `offset`
-    //    2. memory the `grow_size` as `50`
-    // 2. cache existed, than reuse `offset` in cache
-    //    1. if `grow_size` is big enough than reuse it
-    //    2. or grow more to reach the needed, than update the cache
-    mem.grow(100).unwrap();
-    let offset = current_tail + 1;
-    mem.write(data_buffer, offset).unwrap();
+    let instance_name = caller.instance().unwrap().name().unwrap();
+    let cache = unsafe { GREW_SIZE.get(&instance_name) };
 
-    Ok(vec![
-        WasmValue::from_i32(offset as i32),
-        WasmValue::from_i32(data_buffer.len() as i32),
-    ])
+    match cache {
+        // 1. cache missing than grow 50
+        None => {
+            let current_tail = mem.size();
+
+            mem.grow(pages).unwrap();
+            let offset = current_tail + 1;
+            // 1. memory the `current_tail+1` as `offset`
+            mem.write(data_buffer, offset).unwrap();
+            // 2. memory the `pages` we just grow
+            unsafe {
+                GREW_SIZE.insert(instance_name, GrowCache { offset, pages });
+            }
+
+            Ok(vec![
+                WasmValue::from_i32(offset as i32),
+                WasmValue::from_i32(data_buffer.len() as i32),
+            ])
+        }
+        // 2. cache existed, than reuse `offset` in cache
+        Some(cache) => {
+            let offset = cache.offset;
+            // the size we already have
+            let grew_pages = cache.pages;
+
+            if grew_pages >= pages {
+                // 1. if `grow_size` is big enough than reuse it
+                mem.write(data_buffer, offset).unwrap();
+                Ok(vec![
+                    WasmValue::from_i32(offset as i32),
+                    WasmValue::from_i32(data_buffer.len() as i32),
+                ])
+            } else {
+                // 2. or grow more to reach the needed, than update the cache
+                mem.grow(pages - grew_pages).unwrap();
+                mem.write(data_buffer, offset).unwrap();
+                unsafe {
+                    GREW_SIZE.insert(instance_name, GrowCache { offset, pages });
+                }
+
+                Ok(vec![
+                    WasmValue::from_i32(offset as i32),
+                    WasmValue::from_i32(data_buffer.len() as i32),
+                ])
+            }
+        }
+    }
 }
 
 fn main() -> Result<(), Error> {

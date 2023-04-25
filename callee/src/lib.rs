@@ -16,7 +16,6 @@ impl ToString for ReadBuf {
 
 #[link(wasm_import_module = "wasmedge.component.model")]
 extern "wasm" {
-    fn require_queue() -> i32;
     fn write(id: i32, offset: usize, len: usize);
     fn read(id: i32) -> ReadBuf;
 }

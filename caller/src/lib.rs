@@ -33,14 +33,7 @@ extern "C" {
     fn component_foo(id: i32);
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn start() -> u32 {
-    let person = Person {
-        name: "John".to_string(),
-        age: 18,
-    };
-    let new_age: u32 = 20;
-
+unsafe fn foo(person: Person, new_age: u32) -> Person {
     let id = require_queue();
 
     let arg1 = serde_json::to_string(&person).unwrap();
@@ -55,7 +48,18 @@ pub unsafe extern "C" fn start() -> u32 {
         returns.push(read(id).to_string().clone());
     }
 
-    let p: Person = serde_json::from_str(returns[0].as_str()).unwrap();
+    serde_json::from_str(returns[0].as_str()).unwrap()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn start() -> u32 {
+    let person = Person {
+        name: "John".to_string(),
+        age: 18,
+    };
+    let new_age: u32 = 20;
+
+    let _ = foo(person, new_age);
 
     return 0;
 }

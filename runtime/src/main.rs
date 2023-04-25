@@ -1,6 +1,9 @@
 use anyhow::Error;
 use once_cell::sync::Lazy;
-use std::collections::{HashMap, VecDeque};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::atomic::{AtomicI32, Ordering},
+};
 use wasmedge_sdk::{
     config::{CommonConfigOptions, ConfigBuilder, HostRegistrationConfigOptions},
     error::HostFuncError,
@@ -12,28 +15,84 @@ struct GrowCache {
     pages: u32,
 }
 
-static mut EXCHANGING: VecDeque<String> = VecDeque::new();
-static mut GREW_SIZE: Lazy<HashMap<String, GrowCache>> = Lazy::new(|| HashMap::new());
+struct GlobalState {
+    counter: AtomicI32,
+    grow_cache: HashMap<String, GrowCache>,
+    queue_pool: HashMap<i32, VecDeque<String>>,
+}
+
+impl GlobalState {
+    fn new() -> Self {
+        Self {
+            counter: AtomicI32::new(0),
+            queue_pool: HashMap::new(),
+            grow_cache: HashMap::new(),
+        }
+    }
+
+    // This allocation algorithm relys on HashMap will limit the bucket size to a fixed number,
+    // and the calls will not grow too fast (run out of i32 to use).
+    // It still might have problem, if two limits above are broke.
+    fn new_queue(&mut self) -> i32 {
+        let id = self.counter.fetch_add(1, Ordering::SeqCst);
+        self.queue_pool.insert(id, VecDeque::new());
+        id
+    }
+
+    fn put_buffer(&mut self, queue_id: i32, buf: String) {
+        self.queue_pool.get_mut(&queue_id).unwrap().push_back(buf);
+    }
+
+    fn read_buffer(&mut self, queue_id: i32) -> String {
+        self.queue_pool
+            .get_mut(&queue_id)
+            .unwrap()
+            .pop_front()
+            .unwrap()
+    }
+
+    fn get_cache(&self, instance_name: &String) -> Option<&GrowCache> {
+        self.grow_cache.get(instance_name)
+    }
+
+    fn update_cache(&mut self, instance_name: String, offset: u32, pages: u32) {
+        self.grow_cache
+            .insert(instance_name, GrowCache { offset, pages });
+    }
+}
+
+static mut STATE: Lazy<GlobalState> = Lazy::new(|| GlobalState::new());
+
+#[host_function]
+fn require_queue(_caller: Caller, _input: Vec<WasmValue>) -> Result<Vec<WasmValue>, HostFuncError> {
+    unsafe {
+        let id = STATE.new_queue();
+        Ok(vec![WasmValue::from_i32(id)])
+    }
+}
 
 #[host_function]
 fn put_buffer(caller: Caller, input: Vec<WasmValue>) -> Result<Vec<WasmValue>, HostFuncError> {
-    let offset = input[0].to_i32() as u32;
-    let len = input[1].to_i32() as u32;
+    let id = input[0].to_i32() as u32;
+    let offset = input[1].to_i32() as u32;
+    let len = input[2].to_i32() as u32;
 
     let data_buffer = caller.memory(0).unwrap().read_string(offset, len).unwrap();
 
     println!("enqueue {}", data_buffer.clone());
 
     unsafe {
-        EXCHANGING.push_back(data_buffer);
+        STATE.put_buffer(id as i32, data_buffer);
     }
 
     Ok(vec![])
 }
 
 #[host_function]
-fn read_buffer(caller: Caller, _input: Vec<WasmValue>) -> Result<Vec<WasmValue>, HostFuncError> {
-    let data_buffer = unsafe { &EXCHANGING.pop_front().unwrap() };
+fn read_buffer(caller: Caller, input: Vec<WasmValue>) -> Result<Vec<WasmValue>, HostFuncError> {
+    let id = input[0].to_i32() as u32;
+
+    let data_buffer = unsafe { &STATE.read_buffer(id as i32) };
     let data_size = (data_buffer.as_bytes().len() * 8) as u32;
     // one page = 64KiB = 65,536 bytes
     let pages = (data_size / (65536)) + 1;
@@ -46,7 +105,7 @@ fn read_buffer(caller: Caller, _input: Vec<WasmValue>) -> Result<Vec<WasmValue>,
     let mut mem = caller.memory(0).unwrap();
 
     let instance_name = caller.instance().unwrap().name().unwrap();
-    let cache = unsafe { GREW_SIZE.get(&instance_name) };
+    let cache = unsafe { STATE.get_cache(&instance_name) };
 
     match cache {
         // 1. cache missing than grow 50
@@ -59,7 +118,7 @@ fn read_buffer(caller: Caller, _input: Vec<WasmValue>) -> Result<Vec<WasmValue>,
             mem.write(data_buffer, offset).unwrap();
             // 2. memory the `pages` we just grow
             unsafe {
-                GREW_SIZE.insert(instance_name, GrowCache { offset, pages });
+                STATE.update_cache(instance_name, offset, pages);
             }
 
             Ok(vec![
@@ -85,7 +144,7 @@ fn read_buffer(caller: Caller, _input: Vec<WasmValue>) -> Result<Vec<WasmValue>,
                 mem.grow(pages - grew_pages).unwrap();
                 mem.write(data_buffer, offset).unwrap();
                 unsafe {
-                    GREW_SIZE.insert(instance_name, GrowCache { offset, pages });
+                    STATE.update_cache(instance_name, offset, pages);
                 }
 
                 Ok(vec![
@@ -103,8 +162,9 @@ fn main() -> Result<(), Error> {
         .build()?;
 
     let import_object = ImportObjectBuilder::new()
-        .with_func::<(i32, i32), ()>("write", put_buffer)?
-        .with_func::<(), (i32, i32)>("read", read_buffer)?
+        .with_func::<(), i32>("require_queue", require_queue)?
+        .with_func::<(i32, i32, i32), ()>("write", put_buffer)?
+        .with_func::<i32, (i32, i32)>("read", read_buffer)?
         .build("wasmedge.component.model")?;
 
     let vm = Vm::new(Some(config))?

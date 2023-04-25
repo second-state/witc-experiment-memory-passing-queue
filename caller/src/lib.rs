@@ -16,8 +16,9 @@ impl ToString for ReadBuf {
 
 #[link(wasm_import_module = "wasmedge.component.model")]
 extern "wasm" {
-    fn write(offset: usize, len: usize);
-    fn read() -> ReadBuf;
+    fn require_queue() -> i32;
+    fn write(id: i32, offset: usize, len: usize);
+    fn read(id: i32) -> ReadBuf;
 
 }
 
@@ -29,7 +30,7 @@ struct Person {
 
 #[link(wasm_import_module = "callee")]
 extern "C" {
-    fn component_foo();
+    fn component_foo(id: i32);
 }
 
 #[no_mangle]
@@ -40,16 +41,18 @@ pub unsafe extern "C" fn start() -> u32 {
     };
     let new_age: u32 = 20;
 
-    let arg1 = serde_json::to_string(&person).unwrap();
-    write(arg1.as_ptr() as usize, arg1.len());
-    let arg2 = serde_json::to_string(&new_age).unwrap();
-    write(arg2.as_ptr() as usize, arg2.len());
+    let id = require_queue();
 
-    component_foo();
+    let arg1 = serde_json::to_string(&person).unwrap();
+    write(id, arg1.as_ptr() as usize, arg1.len());
+    let arg2 = serde_json::to_string(&new_age).unwrap();
+    write(id, arg2.as_ptr() as usize, arg2.len());
+
+    component_foo(id);
     let mut returns: Vec<String> = vec![];
     for _ in 0..1 {
         // NOTE: we must clone this string, because next `read` will reuse this memory block
-        returns.push(read().to_string().clone());
+        returns.push(read(id).to_string().clone());
     }
 
     let p: Person = serde_json::from_str(returns[0].as_str()).unwrap();

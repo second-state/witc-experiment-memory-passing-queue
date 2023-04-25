@@ -73,7 +73,7 @@ fn require_queue(_caller: Caller, _input: Vec<WasmValue>) -> Result<Vec<WasmValu
 
 #[host_function]
 fn put_buffer(caller: Caller, input: Vec<WasmValue>) -> Result<Vec<WasmValue>, HostFuncError> {
-    let id = input[0].to_i32() as u32;
+    let id = input[0].to_i32();
     let offset = input[1].to_i32() as u32;
     let len = input[2].to_i32() as u32;
 
@@ -82,7 +82,7 @@ fn put_buffer(caller: Caller, input: Vec<WasmValue>) -> Result<Vec<WasmValue>, H
     println!("enqueue {}", data_buffer.clone());
 
     unsafe {
-        STATE.put_buffer(id as i32, data_buffer);
+        STATE.put_buffer(id, data_buffer);
     }
 
     Ok(vec![])
@@ -90,9 +90,9 @@ fn put_buffer(caller: Caller, input: Vec<WasmValue>) -> Result<Vec<WasmValue>, H
 
 #[host_function]
 fn read_buffer(caller: Caller, input: Vec<WasmValue>) -> Result<Vec<WasmValue>, HostFuncError> {
-    let id = input[0].to_i32() as u32;
+    let id = input[0].to_i32();
 
-    let data_buffer = unsafe { &STATE.read_buffer(id as i32) };
+    let data_buffer = unsafe { &STATE.read_buffer(id) };
     let data_size = (data_buffer.as_bytes().len() * 8) as u32;
     // one page = 64KiB = 65,536 bytes
     let pages = (data_size / (65536)) + 1;

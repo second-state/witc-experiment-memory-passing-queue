@@ -1,5 +1,3 @@
-#![feature(wasm_abi)]
-
 use serde::{Deserialize, Serialize};
 
 #[repr(C)]
@@ -15,7 +13,7 @@ impl ToString for ReadBuf {
 }
 
 #[link(wasm_import_module = "wasmedge.component.model")]
-extern "wasm" {
+extern "C" {
     fn require_queue() -> i32;
     fn write(id: i32, offset: usize, len: usize);
     fn read(id: i32) -> ReadBuf;
@@ -52,7 +50,9 @@ pub unsafe extern "C" fn start() -> u32 {
     };
     let new_age: u32 = 20;
 
-    let _ = foo(person, new_age);
+    assert!(person.age == 18);
+    let p = foo(person, new_age);
+    assert!(p.age == 20);
 
-    return 0;
+    return p.age;
 }

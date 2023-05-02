@@ -90,9 +90,10 @@ fn put_buffer(caller: Caller, input: Vec<WasmValue>) -> Result<Vec<WasmValue>, H
 
 #[host_function]
 fn read_buffer(caller: Caller, input: Vec<WasmValue>) -> Result<Vec<WasmValue>, HostFuncError> {
-    let id = input[0].to_i32();
+    let read_buf_struct_ptr = input[0].to_i32() as u32;
+    let queue_id = input[1].to_i32();
 
-    let data_buffer = unsafe { &STATE.read_buffer(id) };
+    let data_buffer = unsafe { &STATE.read_buffer(queue_id) };
     // capacity will use underlying vector's capacity
     // potential problem is it might be bigger than exact (data) needs
     let data_size = (data_buffer.capacity() * 8) as u32;
@@ -142,10 +143,20 @@ fn read_buffer(caller: Caller, input: Vec<WasmValue>) -> Result<Vec<WasmValue>, 
     };
 
     mem.write(data_buffer, offset).unwrap();
-    Ok(vec![
-        WasmValue::from_i32(offset as i32),
-        WasmValue::from_i32(data_buffer.len() as i32),
-    ])
+
+    let instance_ptr = offset as u32;
+    let mut struct_content = instance_ptr.to_le_bytes().to_vec();
+    // This assuming that the struct `ReadBuf` in instance will have linear layout
+    //
+    // #[repr(C)]
+    // pub struct ReadBuf {
+    //     pub offset: usize,
+    //     pub len: usize,
+    // }
+    struct_content.extend((data_buffer.len() as u32).to_le_bytes());
+    mem.write(struct_content, read_buf_struct_ptr).unwrap();
+
+    Ok(vec![])
 }
 
 fn main() -> Result<(), Error> {
@@ -156,7 +167,7 @@ fn main() -> Result<(), Error> {
     let import_object = ImportObjectBuilder::new()
         .with_func::<(), i32>("require_queue", require_queue)?
         .with_func::<(i32, i32, i32), ()>("write", put_buffer)?
-        .with_func::<i32, (i32, i32)>("read", read_buffer)?
+        .with_func::<(i32, i32), ()>("read", read_buffer)?
         .build("wasmedge.component.model")?;
 
     let vm = Vm::new(Some(config))?
@@ -165,7 +176,7 @@ fn main() -> Result<(), Error> {
         .register_module_from_file("caller", "target/wasm32-wasi/release/caller.wasm")?;
 
     let result = vm.run_func(Some("caller"), "start", None)?;
-    assert!(result[0].to_i32() == 0);
+    assert!(result[0].to_i32() == 20);
 
     Ok(())
 }

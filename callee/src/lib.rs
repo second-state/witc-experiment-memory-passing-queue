@@ -1,5 +1,3 @@
-#![feature(wasm_abi)]
-
 use serde::{Deserialize, Serialize};
 
 #[repr(C)]
@@ -15,7 +13,7 @@ impl ToString for ReadBuf {
 }
 
 #[link(wasm_import_module = "wasmedge.component.model")]
-extern "wasm" {
+extern "C" {
     fn write(id: i32, offset: usize, len: usize);
     fn read(id: i32) -> ReadBuf;
 }

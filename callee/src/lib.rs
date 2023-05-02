@@ -35,15 +35,10 @@ fn foo(person: Person, new_age: u32) -> Person {
 
 #[no_mangle]
 pub unsafe extern "C" fn component_foo(id: i32) {
-    let mut args: Vec<String> = vec![];
-    for _ in 0..2 {
-        // NOTE: we must clone this string, because next `read` will reuse this memory block
-        args.push(read(id).to_string().clone());
-    }
-
-    let person: Person = serde_json::from_str(args[0].as_str()).expect("person decode failed");
-    let new_age: u32 = serde_json::from_str(args[1].as_str()).expect("age decode failed");
-
+    let person: Person =
+        serde_json::from_str(read(id).to_string().as_str()).expect("person decode failed");
+    let new_age: u32 =
+        serde_json::from_str(read(id).to_string().as_str()).expect("age decode failed");
     let new_person = foo(person, new_age);
 
     let new_person_str = serde_json::to_string(&new_person).unwrap();

@@ -79,7 +79,7 @@ fn put_buffer(caller: Caller, input: Vec<WasmValue>) -> Result<Vec<WasmValue>, H
 
     let data_buffer = caller.memory(0).unwrap().read_string(offset, len).unwrap();
 
-    println!("enqueue {}", data_buffer.clone());
+    println!("enqueue `{}`", data_buffer.clone());
 
     unsafe {
         STATE.put_buffer(id, data_buffer);
@@ -93,7 +93,9 @@ fn read_buffer(caller: Caller, input: Vec<WasmValue>) -> Result<Vec<WasmValue>, 
     let id = input[0].to_i32();
 
     let data_buffer = unsafe { &STATE.read_buffer(id) };
-    let data_size = (data_buffer.as_bytes().len() * 8) as u32;
+    // capacity will use underlying vector's capacity
+    // potential problem is it might be bigger than exact (data) needs
+    let data_size = (data_buffer.capacity() * 8) as u32;
     // one page = 64KiB = 65,536 bytes
     let pages = (data_size / (65536)) + 1;
 
@@ -105,26 +107,20 @@ fn read_buffer(caller: Caller, input: Vec<WasmValue>) -> Result<Vec<WasmValue>, 
     let mut mem = caller.memory(0).unwrap();
 
     let instance_name = caller.instance().unwrap().name().unwrap();
-    let cache = unsafe { STATE.get_cache(&instance_name) };
-
-    match cache {
+    let offset = match unsafe { STATE.get_cache(&instance_name) } {
         // 1. cache missing than grow 50
         None => {
             let current_tail = mem.size();
+            let offset = current_tail + 1;
 
             mem.grow(pages).unwrap();
-            let offset = current_tail + 1;
             // 1. memory the `current_tail+1` as `offset`
-            mem.write(data_buffer, offset).unwrap();
             // 2. memory the `pages` we just grow
             unsafe {
                 STATE.update_cache(instance_name, offset, pages);
             }
 
-            Ok(vec![
-                WasmValue::from_i32(offset as i32),
-                WasmValue::from_i32(data_buffer.len() as i32),
-            ])
+            offset
         }
         // 2. cache existed, than reuse `offset` in cache
         Some(cache) => {
@@ -132,28 +128,24 @@ fn read_buffer(caller: Caller, input: Vec<WasmValue>) -> Result<Vec<WasmValue>, 
             // the size we already have
             let grew_pages = cache.pages;
 
-            if grew_pages >= pages {
-                // 1. if `grow_size` is big enough than reuse it
-                mem.write(data_buffer, offset).unwrap();
-                Ok(vec![
-                    WasmValue::from_i32(offset as i32),
-                    WasmValue::from_i32(data_buffer.len() as i32),
-                ])
-            } else {
-                // 2. or grow more to reach the needed, than update the cache
+            // if `grew_pages` isn't big enough then grow more to reach the needed
+            if grew_pages < pages {
                 mem.grow(pages - grew_pages).unwrap();
-                mem.write(data_buffer, offset).unwrap();
                 unsafe {
+                    // and update the cache
                     STATE.update_cache(instance_name, offset, pages);
                 }
-
-                Ok(vec![
-                    WasmValue::from_i32(offset as i32),
-                    WasmValue::from_i32(data_buffer.len() as i32),
-                ])
             }
+
+            offset
         }
-    }
+    };
+
+    mem.write(data_buffer, offset).unwrap();
+    Ok(vec![
+        WasmValue::from_i32(offset as i32),
+        WasmValue::from_i32(data_buffer.len() as i32),
+    ])
 }
 
 fn main() -> Result<(), Error> {

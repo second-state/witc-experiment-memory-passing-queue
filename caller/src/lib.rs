@@ -41,13 +41,7 @@ unsafe fn foo(person: Person, new_age: u32) -> Person {
     write(id, arg2.as_ptr() as usize, arg2.len());
 
     component_foo(id);
-    let mut returns: Vec<String> = vec![];
-    for _ in 0..1 {
-        // NOTE: we must clone this string, because next `read` will reuse this memory block
-        returns.push(read(id).to_string().clone());
-    }
-
-    serde_json::from_str(returns[0].as_str()).unwrap()
+    serde_json::from_str(read(id).to_string().as_str()).unwrap()
 }
 
 #[no_mangle]
